@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <title>TheraViewer</title>
+  <style>
+    body { font-family: sans-serif; padding: 20px; background: #f9f9f9; }
+    table { border-collapse: collapse; width: 100%; margin-top: 20px; }
+    th, td { border: 1px solid #ccc; padding: 8px; text-align: center; }
+    .confirmed { background-color: #d4edda; }
+    .cancelled { background-color: #f8d7da; }
+    .highlighted-row { background-color: #fff3cd; }
+    .conflict-host, .conflict-time, .conflict-place, .conflict-role, .conflict-doc {
+      background-color: #ffcccc !important;
+    }
+    .conflict-place-soft {
+      background-color: #ffe0b3 !important;
+    }
+    .doc-name-button {
+      background: #eee; border: none; padding: 4px 8px; cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+<h2>📥 استيراد ملف JSON لعرض الجدول وكشف التعارض</h2>
+<input type="file" accept=".json" onchange="loadFromJSON(this)">
+<table id="excelTable">
+  <thead>
+    <tr id="headerRow">
+      <th>المضيف</th>
+      <th>المكان</th>
+      <th>الضيف</th>
+      <th>الوقت</th>
+      <th>التاريخ</th>
+      <th>الوثائق</th>
+      <th>الحالة</th>
+    </tr>
+  </thead>
+  <tbody></tbody>
+</table>
+<script>
+const acceptedMap = new Map();
+
+function normalizeDate(input) {
+  if (!input) return "";
+  const arabicMonths = {
+    "كانون الثاني": "01", "شباط": "02", "آذار": "03", "نيسان": "04",
+    "أيار": "05", "حزيران": "06", "تموز": "07", "آب": "08",
+    "أيلول": "09", "تشرين الأول": "10", "تشرين الثاني": "11", "كانون الأول": "12"
+  };
+  input = input.trim().replace(/\s+/g, ' ');
+  if (/^\d{4}-\d{2}-\d{2}$/.test(input)) return input;
+  const parts = input.split(/[-\/\.]/);
+  if (parts.length === 3) {
+    const [d1, d2, d3] = parts.map(p => p.padStart(2, '0'));
+    if (d1.length === 4) return `${d1}-${d2}-${d3}`;
+    return `${d3}-${d2}-${d1}`;
+  }
+  const match1 = input.match(/^(\d{1,2}) ([\u0600-\u06FF\s]+) (\d{4})$/);
+  if (match1) {
+    const day = match1[1].padStart(2, '0');
+    const month = arabicMonths[match1[2].trim()] || "00";
+    const year = match1[3];
+    return `${year}-${month}-${day}`;
+  }
+  const match2 = input.match(/^(\d{4}) ([\u0600-\u06FF\s]+) (\d{1,2})$/);
+  if (match2) {
+    const year = match2[1];
+    const month = arabicMonths[match2[2].trim()] || "00";
+    const day = match2[3].padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+  return input;
+}
+
+function timeToMinutes(timeStr) {
+  const [h, m] = timeStr.split(':').map(Number);
+  return h * 60 + m;
+}
+
+function checkConflicts() {
+  const rows = Array.from(document.querySelectorAll('#excelTable tbody tr'));
+  const data = [];
+  const fileNames = new Map();
+  const gap = 30;
+
+  rows.forEach(row => {
+    row.querySelectorAll('td').forEach(cell => {
+      cell.classList.remove(
+        'conflict-host', 'conflict-time', 'conflict-place',
+        'conflict-place-soft', 'conflict-role', 'conflict-doc'
+      );
+    });
+
+    const docCell = row.querySelector('.doc-box');
+    if (docCell && docCell.getAttribute('data-name')) {
+      const name = docCell.getAttribute('data-name');
+      if (fileNames.has(name)) {
+        docCell.classList.add('conflict-doc');
+        fileNames.get(name).classList.add('conflict-doc');
+      } else {
+        fileNames.set(name, docCell);
+      }
+    }
+  });
+
+  rows.forEach((row, index) => {
+    const cells = row.querySelectorAll('td');
+    const host = cells[0]?.textContent.trim();
+    const place = cells[1]?.textContent.trim();
+    const guest = cells[2]?.textContent.trim();
+    const time = cells[3]?.textContent.trim();
+    const date = normalizeDate(cells[4]?.textContent.trim());
+
+    if (host && guest && time && date) {
+      data.push({ index, host, guest, place, time, date });
+    }
+  });
+
+  for (let i = 0; i < data.length; i++) {
+    for (let j = i + 1; j < data.length; j++) {
+      const a = data[i], b = data[j];
+      if (a.date !== b.date) continue;
+
+      const tA = timeToMinutes(a.time);
+      const tB = timeToMinutes(b.time);
+      const sameTime = tA === tB;
+      const timeDiff = Math.abs(tA - tB);
+
+      const rowA = rows[a.index].querySelectorAll('td');
+      const rowB = rows[b.index].querySelectorAll('td');
+
+      if (sameTime && (a.host === b.host || a.guest === b.guest)) {
+        if (a.host === b.host) {
+          rowA[0].classList.add('conflict-host');
+          rowB[0].classList.add('conflict-host');
+        }
+        if (a.guest === b.guest) {
+          rowA[2].classList.add('conflict-host');
+          rowB[2].classList.add('conflict-host');
+        }
+      }
+
+      if (sameTime && a.place && b.place && a.place === b.place) {
+        rowA[1].classList.add('conflict-place');
+        rowB[1].classList.add('conflict-place');
+      }
+
+      if (timeDiff > 0 && timeDiff < gap && a.place === b.place) {
+        rowA[1].classList.add('conflict-place-soft');
+        rowB[1].classList.add('conflict-place-soft');
+      }
+
+      if (sameTime && a.host === b.guest) {
+        rowA[0].classList.add('conflict-role');
+        rowB[2].classList.add('conflict-role');
+      }
+      if (sameTime && a.guest === b.host) {
+        rowA[2].classList.add('conflict-role');
+        rowB[0].classList.add('conflict-role');
+      }
+
+      if (timeDiff > 0 && timeDiff < gap && (a.host === b.host || a.guest === b.guest)) {
+        if (a.host === b.host) {
+          rowA[3].classList.add('conflict-time');
+          rowB[3].classList.add('conflict-time');
+        }
+        if (a.guest === b.guest) {
+          rowA[3].classList.add('conflict-time');
+          rowB[3].classList.add('conflict-time');
+        }
+      }
+
+      if (timeDiff > 0 && timeDiff < gap && (a.host === b.guest || a.guest === b.host)) {
+        rowA[3].classList.add('conflict-time');
+        rowB[3].classList.add('conflict-time');
+      }
+    }
+  }
+}
+</script>
+<script>
+function loadFromJSON(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    const data = JSON.parse(reader.result);
+    const tbody = document.querySelector('#excelTable tbody');
+    tbody.innerHTML = '';
+
+    data.forEach(rowData => {
+      const row = document.createElement('tr');
+
+      for (let i = 0; i < 7; i++) {
+        const td = document.createElement('td');
+
+        if (i === 5) { // الوثائق
+          const doc = rowData[i];
+          const div = document.createElement('div');
+          div.className = 'doc-box';
+          if (doc && doc.type === "file" && doc.data) {
+            const btn = document.createElement('button');
+            btn.className = 'doc-name-button';
+            btn.textContent = doc.name;
+            btn.onclick = () => window.open(doc.data, '_blank');
+            div.appendChild(btn);
+            div.setAttribute('data-file', doc.data);
+            div.setAttribute('data-name', doc.name);
+          } else {
+            div.textContent = doc?.name || 'لا يوجد وثيقة';
+          }
+          td.appendChild(div);
+        }
+
+        else if (i === 6) { // الحالة
+          const statusObj = rowData[i];
+          const div = document.createElement('div');
+          div.className = 'status-buttons';
+          div.innerHTML = `
+            <button>✅</button>
+            <button class="bulb-button">💡</button>
+            <button>❌</button>
+          `;
+          td.appendChild(div);
+
+          if (statusObj?.status === "✅️") {
+            row.classList.add("confirmed");
+          } else if (statusObj?.status === "❌️") {
+            row.classList.add("cancelled");
+          } else if (statusObj?.status === "💡") {
+            row.classList.add("highlighted-row");
+            const host = rowData[0]?.trim();
+            const guest = rowData[2]?.trim();
+            const selected = guest || host;
+            acceptedMap.set(row, selected);
+            setTimeout(() => {
+              row.querySelectorAll('td').forEach(cell => {
+                if (cell.textContent.trim() === selected) {
+                  cell.classList.add('accepted');
+                }
+              });
+              const bulb = row.querySelector('.bulb-button');
+              if (bulb) bulb.classList.add('bulb-on');
+            }, 0);
+          }
+        }
+
+        else { // باقي الأعمدة
+          td.textContent = typeof rowData[i] === "string" ? rowData[i] : '';
+        }
+
+        row.appendChild(td);
+      }
+
+      tbody.appendChild(row);
+    });
+
+    checkConflicts();
+  };
+  reader.readAsText(file);
+}
+</script>
+</body>
+</html>
